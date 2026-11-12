@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ahmedabad Metro Navigator - Smart Route Planner</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #f1f5f9; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+    
+    .station-node { transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1); cursor: pointer; transform-box: fill-box; transform-origin: center; }
+    .station-node:hover { filter: drop-shadow(0 0 8px rgba(59, 130, 246, 0.9)); transform: scale(1.35); }
+    
+    .track-edge { transition: stroke-width 0.2s ease, opacity 0.2s ease; cursor: pointer; }
+    .track-edge:hover { stroke-width: 8px !important; stroke-opacity: 0.95 !important; }
+
+    @keyframes drawRoute {
+      from { stroke-dashoffset: 1; }
+      to { stroke-dashoffset: 0; }
+    }
+    .path-animated {
+      stroke-dasharray: 1;
+      stroke-dashoffset: 1;
+      animation: drawRoute 1.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    }
+    
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateX(10px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+    .animate-step { animation: slideIn 0.3s ease-out forwards; opacity: 0; }
+
+    @keyframes markerPulse {
+      0% { r: 12; stroke-opacity: 0.9; }
+      50% { r: 18; stroke-opacity: 0.3; }
+      100% { r: 12; stroke-opacity: 0.9; }
+    }
+    .origin-pulse {
+      animation: markerPulse 1.8s infinite ease-in-out;
+      transform-box: fill-box;
+      transform-origin: center;
+    }
+    .dest-pulse {
+      animation: markerPulse 1.8s infinite ease-in-out;
+      animation-delay: 0.4s;
+      transform-box: fill-box;
+      transform-origin: center;
+    }
+
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 h-screen flex flex-col font-sans select-none overflow-hidden">
+
+  <!-- TOP HEADER -->
+  <header class="bg-gradient-to-r from-blue-600 via-indigo-600 to-red-500 shadow-md px-6 py-3.5 flex items-center justify-between shrink-0 z-20 relative">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-sm">
+        <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+      </div>
+      <div>
+        <h1 class="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+          Ahmedabad Metro Navigator
+        </h1>
+      </div>
+    </div>
+
+    <!-- Header Actions -->
+    <div class="flex items-center gap-3 text-sm">
+      <button onclick="resetAllTracks()" title="Reset any closed tracks or delays across the network" class="flex items-center gap-1.5 bg-white/15 hover:bg-white/25 border border-white/25 px-3 py-1.5 rounded-lg text-white font-medium text-xs transition shadow-sm">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+        Reset Tracks
+      </button>
+
+      <span class="bg-white/20 backdrop-blur border border-white/30 px-3 py-1.5 rounded-full text-white font-medium text-xs shadow-sm hidden md:inline-block">
+        🕒 06:20 AM – 10:05 PM
+      </span>
+    </div>
+  </header>
+
+  <!-- MAIN WORKSPACE -->
+  <div class="flex-1 flex overflow-hidden relative">
+
+    <!-- LEFT SIDEBAR: ROUTE CONTROLS -->
+    <aside class="w-80 bg-white shadow-[4px_0_24px_rgba(0,0,0,0.04)] p-6 flex flex-col gap-5 overflow-y-auto shrink-0 z-10 border-r border-slate-100">
+      
+      <div class="space-y-4">
+        <div class="flex items-center justify-between">
+          <h2 class="text-xs font-bold uppercase tracking-wider text-slate-400">Plan Your Journey</h2>
+          <button id="swapBtn" class="text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50 px-2 py-1 rounded-md transition font-semibold flex items-center gap-1">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"></path></svg>
+            Swap
+          </button>
+        </div>
+
+        <div class="space-y-3">
+          <div>
+            <label class="text-xs font-semibold text-slate-500 block mb-1.5 flex items-center gap-1.5">
+              <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span>
+              Origin Station
+            </label>
+            <select id="originSelect" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 text-xs text-slate-700 font-medium focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none transition shadow-sm"></select>
+          </div>
+          <div>
+            <label class="text-xs font-semibold text-slate-500 block mb-1.5 flex items-center gap-1.5">
+              <span class="w-2.5 h-2.5 rounded-full bg-red-500 inline-block"></span>
+              Destination Station
+            </label>
+            <select id="destSelect" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 text-xs text-slate-700 font-medium focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none transition shadow-sm"></select>
+          </div>
+        </div>
+      </div>
+
+      <div class="space-y-3 border-t border-slate-100 pt-4">
+        <label class="text-xs font-semibold text-slate-500 block">Routing Algorithm</label>
+        <div class="grid grid-cols-2 gap-2.5">
+          <button id="algoDijkstra" onclick="setAlgo('dijkstra')" class="py-2 px-2 rounded-lg text-xs font-bold border-2 border-blue-500 bg-blue-50 text-blue-700 transition flex flex-col items-center gap-0.5 shadow-sm">
+            <span>⚡ Fastest</span>
+            <span class="text-[10px] font-normal text-blue-500">Dijkstra (Min-Heap)</span>
+          </button>
+          <button id="algoBfs" onclick="setAlgo('bfs')" class="py-2 px-2 rounded-lg text-xs font-semibold border-2 border-slate-200 bg-white text-slate-500 hover:border-slate-300 transition flex flex-col items-center gap-0.5">
+            <span>🛑 Min Stops</span>
+            <span class="text-[10px] font-normal text-slate-400">BFS (FIFO Queue)</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="space-y-2 border-t border-slate-100 pt-4">
+        <label class="text-xs font-semibold text-slate-500 block">Commute Time & Headway</label>
+        <select id="peakSelect" class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-700 focus:border-blue-500 outline-none shadow-sm transition">
+          <option value="true">Peak Hours (3 min transfer/wait)</option>
+          <option value="false">Off-Peak (8 min transfer/wait)</option>
+        </select>
+      </div>
+
+      <button onclick="findRoute()" class="w-full mt-auto py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold rounded-xl text-sm shadow-[0_8px_16px_rgba(79,70,229,0.2)] transform hover:-translate-y-0.5 transition-all flex items-center justify-center gap-2">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"></path></svg>
+        Find Optimal Route
+      </button>
+    </aside>
+
+    <!-- CENTER: INTERACTIVE SVG METRO SCHEMATIC -->
+    <main class="flex-1 relative overflow-auto flex items-center justify-center p-4 bg-[radial-gradient(#e2e8f0_1px,transparent_1px)] [background-size:20px_20px]">
+      
+      <!-- Floating Map Legend -->
+      <div class="absolute top-6 left-6 bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl p-3.5 text-xs space-y-2 z-10 shadow-lg">
+        <div class="font-bold text-slate-800 uppercase tracking-wide text-[11px] mb-1">Network Corridors</div>
+        <div class="grid grid-cols-2 gap-x-4 gap-y-1.5">
+          <div class="flex items-center gap-2"><span class="w-4 h-2 bg-blue-500 rounded-full shadow-sm"></span> <span class="font-medium text-slate-600">Blue Line</span></div>
+          <div class="flex items-center gap-2"><span class="w-4 h-2 bg-red-500 rounded-full shadow-sm"></span> <span class="font-medium text-slate-600">Red Line</span></div>
+          <div class="flex items-center gap-2"><span class="w-4 h-2 bg-purple-500 rounded-full shadow-sm"></span> <span class="font-medium text-slate-600">Violet Line</span></div>
+          <div class="flex items-center gap-2"><span class="w-4 h-2 bg-emerald-500 rounded-full shadow-sm"></span> <span class="font-medium text-slate-600">Green Line</span></div>
+          <div class="flex items-center gap-2"><span class="w-4 h-2 bg-orange-500 rounded-full shadow-sm"></span> <span class="font-medium text-slate-600">Orange Line</span></div>
+          <div class="flex items-center gap-2"><span class="w-4 h-2 bg-yellow-400 rounded-full shadow-sm"></span> <span class="font-medium text-slate-600">Yellow Line</span></div>
+          <div class="flex items-center gap-2 col-span-2"><span class="w-4 h-2 bg-cyan-500 rounded-full shadow-sm"></span> <span class="font-medium text-slate-600">Western Ring Link</span></div>
+        </div>
+        <div class="border-t border-slate-100 pt-2 space-y-1">
+          <div class="flex items-center gap-2">
+            <span class="w-4 h-0.5 border-t-2 border-dashed border-slate-400"></span>
+            <span class="font-medium text-slate-600">Feeder Connector</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-4 h-0.5 border-t-2 border-dashed border-red-500"></span>
+            <span class="font-medium text-red-600">Closed Track</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="w-3.5 h-3.5 rounded-full border-2 border-slate-700 bg-white"></span>
+            <span class="font-medium text-slate-600">Interchange Junction</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Center SVG Canvas -->
+      <svg id="metroSvg" width="1300" height="960" viewBox="0 0 1300 960" class="max-w-full max-h-full drop-shadow-sm select-none">
+        <defs>
+          <filter id="routeGlow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="4" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          </filter>
+        </defs>
+        <!-- Layer 1: All Base Track Edges -->
+        <g id="edgesLayer"></g>
+        <!-- Layer 2: Delay and Closure Status Badges on Edges -->
+        <g id="edgeBadgesLayer"></g>
+        <!-- Layer 3: Dynamic Animated Route Polyline -->
+        <g id="activePathLayer"></g>
+        <!-- Layer 4: Stations Nodes and Labels -->
+        <g id="nodesLayer"></g>
+        <!-- Layer 5: Origin and Destination Marker Rings -->
+        <g id="selectionMarkersLayer"></g>
+      </svg>
+    </main>
+
+    <!-- RIGHT SIDEBAR: ITINERARY -->
+    <aside class="w-[390px] bg-white shadow-[-4px_0_24px_rgba(0,0,0,0.04)] p-6 flex flex-col gap-5 overflow-y-auto shrink-0 z-10 border-l border-slate-100">
+      
+      <div id="metricsPlaceholder" class="flex-1 flex flex-col items-center justify-center text-center opacity-70 p-4">
+        <div class="w-16 h-16 mb-4 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
+          <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"></path></svg>
+        </div>
+        <h3 class="font-bold text-slate-700 text-sm mb-1">Select Origin & Destination</h3>
+        <p class="text-xs text-slate-500">Pick stations from the dropdowns or click station nodes directly on the map, then click <strong class="text-blue-600">Find Optimal Route</strong>.</p>
+      </div>
+
+      <div id="metricsContent" class="hidden flex-col h-full space-y-5">
+        
+        <!-- Summary Cards -->
+        <div class="grid grid-cols-3 gap-2.5">
+          <div class="bg-blue-50 p-2.5 rounded-xl border border-blue-100 text-center shadow-sm">
+            <div class="text-[9px] uppercase font-bold text-blue-500 mb-0.5">Time</div>
+            <div id="mTime" class="text-base font-black text-blue-700">--</div>
+            <div id="mInTrain" class="text-[9px] text-blue-400">-- in train</div>
+          </div>
+          <div class="bg-emerald-50 p-2.5 rounded-xl border border-emerald-100 text-center shadow-sm">
+            <div class="text-[9px] uppercase font-bold text-emerald-500 mb-0.5">Distance</div>
+            <div id="mDist" class="text-base font-black text-emerald-700">--</div>
+            <div id="mStops" class="text-[9px] text-emerald-500">-- stops</div>
+          </div>
+          <div class="bg-purple-50 p-2.5 rounded-xl border border-purple-100 text-center shadow-sm">
+            <div class="text-[9px] uppercase font-bold text-purple-500 mb-0.5">Fare</div>
+            <div id="mTokenFare" class="text-base font-black text-purple-700">--</div>
+            <div id="mNcmcFare" class="text-[9px] text-purple-400">-- NCMC</div>
+          </div>
+        </div>
+
+        <!-- Algorithm & Transfers Banner -->
+        <div class="flex items-center justify-between bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg text-xs">
+          <div class="flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-blue-600"></span>
+            <span id="algoLabel" class="font-semibold text-slate-700">Dijkstra's Algorithm</span>
+          </div>
+          <div id="mTransfersBadge" class="bg-indigo-100 text-indigo-700 font-bold px-2 py-0.5 rounded text-[10px]">
+            0 Transfers
+          </div>
+        </div>
+
+        <!-- Step-by-Step Station Itinerary -->
+        <div class="flex-1 flex flex-col min-h-0 bg-slate-50 rounded-xl border border-slate-200 p-3.5 shadow-inner">
+          <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3 flex items-center justify-between">
+            <span class="flex items-center gap-1.5">
+              <svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+              Journey Itinerary
+            </span>
+            <span id="stepCountBadge" class="text-[10px] text-slate-400 font-normal">-- steps</span>
+          </h2>
+          <div id="itineraryList" class="space-y-2.5 overflow-y-auto flex-1 pr-1 pb-3">
+            <!-- Dynamic steps -->
+          </div>
+        </div>
+
+      </div>
+    </aside>
+  </div>
+
+  <!-- TRACK MUTATION MODAL (Edge Closures & Delays) -->
+  <div id="trackModal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 hidden items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border border-slate-200 space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div>
+          <h3 class="font-bold text-slate-800 text-base flex items-center gap-2">
+            <span class="text-blue-600">🚇</span> Track Segment Inspector
+          </h3>
+          <p id="trackModalTitle" class="text-xs text-slate-500 font-medium">Station A ↔ Station B</p>
+        </div>
+        <button onclick="closeTrackModal()" class="text-slate-400 hover:text-slate-600 p-1 rounded-lg">✕</button>
+      </div>
+
+      <div class="grid grid-cols-3 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-100 text-center text-xs">
+        <div>
+          <span class="text-[10px] text-slate-400 block font-semibold">Corridor</span>
+          <span id="trackModalLine" class="font-bold text-slate-700">--</span>
+        </div>
+        <div>
+          <span class="text-[10px] text-slate-400 block font-semibold">Distance</span>
+          <span id="trackModalDist" class="font-bold text-slate-700">--</span>
+        </div>
+        <div>
+          <span class="text-[10px] text-slate-400 block font-semibold">Base Time</span>
+          <span id="trackModalBaseTime" class="font-bold text-slate-700">--</span>
+        </div>
+      </div>
+
+      <div class="space-y-3 pt-1">
+        <div class="flex items-center justify-between p-3 bg-red-50/60 border border-red-100 rounded-xl">
+          <div>
+            <span class="font-bold text-xs text-red-900 block">Close Track Segment</span>
+            <span class="text-[11px] text-red-600">Simulate track maintenance or edge failure</span>
+          </div>
+          <input type="checkbox" id="trackCloseCheckbox" class="w-5 h-5 text-red-600 rounded focus:ring-red-400 cursor-pointer" />
+        </div>
+
+        <div class="p-3 bg-amber-50/60 border border-amber-100 rounded-xl space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-xs text-amber-900">Add Signal Delay (minutes)</span>
+            <span id="trackDelayDisplay" class="text-xs font-bold text-amber-700">+0 min</span>
+          </div>
+          <div class="flex gap-2">
+            <button type="button" onclick="setDelayPreset(0)" class="flex-1 py-1 text-xs font-semibold rounded bg-white border border-amber-200 text-slate-600 hover:bg-amber-100">0m</button>
+            <button type="button" onclick="setDelayPreset(5)" class="flex-1 py-1 text-xs font-semibold rounded bg-white border border-amber-200 text-slate-600 hover:bg-amber-100">+5m</button>
+            <button type="button" onclick="setDelayPreset(15)" class="flex-1 py-1 text-xs font-semibold rounded bg-white border border-amber-200 text-slate-600 hover:bg-amber-100">+15m</button>
+          </div>
+          <input type="number" id="trackDelayInput" min="0" max="60" value="0" class="w-full bg-white border border-amber-200 rounded-lg px-3 py-1.5 text-xs text-slate-700 outline-none" placeholder="Custom delay in mins" />
+        </div>
+      </div>
+
+      <div class="flex gap-3 pt-2">
+        <button onclick="closeTrackModal()" class="flex-1 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50 transition">
+          Cancel
+        </button>
+        <button onclick="applyTrackMutation()" class="flex-1 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-xs font-bold text-white shadow-md transition">
+          Apply & Reroute
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let network = { stations: [], edges: [] };
+    let currentAlgo = "dijkstra";
+    let clickSelectToggle = true; 
+    let lastRouteData = null;
+    let selectedEdge = null;
+
+    const LINE_COLORS = {
+      "Blue Line": "#3b82f6",
+      "Red Line": "#ef4444",
+      "Violet Line": "#a855f7",
+      "Green Line": "#10b981",
+      "Orange Line": "#f97316",
+      "Yellow Line": "#eab308",
+      "Western Ring Link": "#06b6d4",
+      "Feeder Connector": "#94a3b8"
+    };
+
+    const TAILWIND_COLORS = {
+      "Blue Line": "bg-blue-500",
+      "Red Line": "bg-red-500",
+      "Violet Line": "bg-purple-500",
+      "Green Line": "bg-emerald-500",
+      "Orange Line": "bg-orange-500",
+      "Yellow Line": "bg-yellow-400",
+      "Western Ring Link": "bg-cyan-500",
+      "Feeder Connector": "bg-slate-400"
+    };
+
+    async function loadNetwork(preserveSelections = true) {
+      try {
+        const res = await fetch("/api/network");
+        network = await res.json();
+        populateDropdowns(preserveSelections);
+        renderMap();
+        updateSelectionMarkers();
+      } catch (err) {
+        console.error("Failed to load network:", err);
+      }
+    }
+
+    function populateDropdowns(preserve = true) {
+      const originSel = document.getElementById("originSelect");
+      const destSel = document.getElementById("destSelect");
+      const prevOrigin = preserve && originSel.value ? originSel.value : "22"; // Paldi default
+      const prevDest = preserve && destSel.value ? destSel.value : "12";     // Commerce Six Road default
+
+      originSel.innerHTML = "";
+      destSel.innerHTML = "";
+
+      network.stations.forEach(st => {
+        const label = `[${st.id}] ${st.name} ${st.is_interchange ? '★' : ''}`;
+        originSel.add(new Option(label, st.id));
+        destSel.add(new Option(label, st.id));
+      });
+
+      originSel.value = prevOrigin;
+      destSel.value = prevDest;
+    }
+
+    function setAlgo(algo) {
+      currentAlgo = algo;
+      const dBtn = document.getElementById("algoDijkstra");
+      const bBtn = document.getElementById("algoBfs");
+      if (algo === "dijkstra") {
+        dBtn.className = "py-2 px-2 rounded-lg text-xs font-bold border-2 border-blue-500 bg-blue-50 text-blue-700 transition flex flex-col items-center gap-0.5 shadow-sm";
+        bBtn.className = "py-2 px-2 rounded-lg text-xs font-semibold border-2 border-slate-200 bg-white text-slate-500 hover:border-slate-300 transition flex flex-col items-center gap-0.5";
+      } else {
+        bBtn.className = "py-2 px-2 rounded-lg text-xs font-bold border-2 border-blue-500 bg-blue-50 text-blue-700 transition flex flex-col items-center gap-0.5 shadow-sm";
+        dBtn.className = "py-2 px-2 rounded-lg text-xs font-semibold border-2 border-slate-200 bg-white text-slate-500 hover:border-slate-300 transition flex flex-col items-center gap-0.5";
+      }
+    }
+
+    document.getElementById("originSelect").addEventListener("change", updateSelectionMarkers);
+    document.getElementById("destSelect").addEventListener("change", updateSelectionMarkers);
+
+    document.getElementById("swapBtn").addEventListener("click", () => {
+      const o = document.getElementById("originSelect");
+      const d = document.getElementById("destSelect");
+      const tmp = o.value;
+      o.value = d.value;
+      d.value = tmp;
+      updateSelectionMarkers();
+    });
+
+    function updateSelectionMarkers() {
+      const layer = document.getElementById("selectionMarkersLayer");
+      if (!layer) return;
+      layer.innerHTML = "";
+
+      const originId = parseInt(document.getElementById("originSelect").value);
+      const destId = parseInt(document.getElementById("destSelect").value);
+
+      const stMap = {};
+      network.stations.forEach(s => stMap[s.id] = s);
+
+      // Origin Marker
+      if (stMap[originId]) {
+        const o = stMap[originId];
+        const ring = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        ring.setAttribute("cx", o.x);
+        ring.setAttribute("cy", o.y);
+        ring.setAttribute("r", "14");
+        ring.setAttribute("fill", "none");
+        ring.setAttribute("stroke", "#10b981");
+        ring.setAttribute("stroke-width", "3");
+        ring.classList.add("origin-pulse");
+        layer.appendChild(ring);
+
+        const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        text.setAttribute("x", o.x);
+        text.setAttribute("y", o.y - 18);
+        text.setAttribute("text-anchor", "middle");
+        text.setAttribute("fill", "#059669");
+        text.setAttribute("font-size", "10");
+        text.setAttribute("font-weight", "800");
+        text.textContent = "ORIGIN";
+        layer.appendChild(text);
+      }
+
+      // Destination Marker
+      if (stMap[destId]) {
+        const d = stMap[destId];
+        const ring = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        ring.setAttribute("cx", d.x);
+        ring.setAttribute("cy", d.y);
+        ring.setAttribute("r", "14");
+        ring.setAttribute("fill", "none");
+        ring.setAttribute("stroke", "#ef4444");
+        ring.setAttribute("stroke-width", "3");
+        ring.classList.add("dest-pulse");
+        layer.appendChild(ring);
+
+        const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        text.setAttribute("x", d.x);
+        text.setAttribute("y", d.y - 18);
+        text.setAttribute("text-anchor", "middle");
+        text.setAttribute("fill", "#dc2626");
+        text.setAttribute("font-size", "10");
+        text.setAttribute("font-weight", "800");
+        text.textContent = "DEST";
+        layer.appendChild(text);
+      }
+    }
+
+    function renderMap(activePathIds = []) {
+      const edgesLayer = document.getElementById("edgesLayer");
+      const edgeBadgesLayer = document.getElementById("edgeBadgesLayer");
+      const activePathLayer = document.getElementById("activePathLayer");
+      const nodesLayer = document.getElementById("nodesLayer");
+
+      edgesLayer.innerHTML = "";
+      edgeBadgesLayer.innerHTML = "";
+      activePathLayer.innerHTML = "";
+      nodesLayer.innerHTML = "";
+
+      const stMap = {};
+      network.stations.forEach(s => stMap[s.id] = s);
+
+      // 1. Draw All Edges
+      network.edges.forEach((e) => {
+        const u = stMap[e.u];
+        const v = stMap[e.v];
+        if (!u || !v) return;
+
+        let color = LINE_COLORS[e.line_name] || "#94a3b8";
+        let dash = "";
+        let opacity = "0.55";
+
+        if (e.is_closed) {
+          color = "#ef4444";
+          dash = "7,5";
+          opacity = "0.7";
+        } else if (e.delay_mins > 0) {
+          color = "#f59e0b";
+        } else if (e.line_name === "Feeder Connector") {
+          dash = "5,5";
+        }
+
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("x1", u.x);
+        line.setAttribute("y1", u.y);
+        line.setAttribute("x2", v.x);
+        line.setAttribute("y2", v.y);
+        line.setAttribute("stroke", color);
+        line.setAttribute("stroke-width", e.is_closed ? "5" : "4.5");
+        line.setAttribute("stroke-opacity", opacity);
+        if (dash) line.setAttribute("stroke-dasharray", dash);
+        line.classList.add("track-edge");
+
+        // Edge Click Handler -> Opens Track Mutation Inspector
+        line.onclick = () => openTrackModal(e);
+
+        edgesLayer.appendChild(line);
+
+        // Edge Badges for Closure or Delay
+        if (e.is_closed || e.delay_mins > 0) {
+          const midX = (u.x + v.x) / 2;
+          const midY = (u.y + v.y) / 2;
+          const badgeGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+          badgeGroup.onclick = () => openTrackModal(e);
+          badgeGroup.style.cursor = "pointer";
+
+          const bg = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+          bg.setAttribute("cx", midX);
+          bg.setAttribute("cy", midY);
+          bg.setAttribute("r", "9");
+          bg.setAttribute("fill", e.is_closed ? "#ef4444" : "#f59e0b");
+          bg.setAttribute("stroke", "#ffffff");
+          bg.setAttribute("stroke-width", "1.5");
+
+          const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+          text.setAttribute("x", midX);
+          text.setAttribute("y", midY + 3);
+          text.setAttribute("text-anchor", "middle");
+          text.setAttribute("fill", "#ffffff");
+          text.setAttribute("font-size", "9");
+          text.setAttribute("font-weight", "bold");
+          text.textContent = e.is_closed ? "✕" : `+${e.delay_mins}`;
+
+          badgeGroup.appendChild(bg);
+          badgeGroup.appendChild(text);
+          edgeBadgesLayer.appendChild(badgeGroup);
+        }
+      });
+
+      // 2. Draw Active Route Polyline with Smooth Animation (Continuous Polyline pathLength=1)
+      if (activePathIds && activePathIds.length >= 2) {
+        const points = activePathIds.map(id => {
+          const st = stMap[id];
+          return `${st.x},${st.y}`;
+        }).join(" ");
+
+        // Subtle route glow
+        const glowPolyline = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+        glowPolyline.setAttribute("points", points);
+        glowPolyline.setAttribute("fill", "none");
+        glowPolyline.setAttribute("stroke", "#3b82f6");
+        glowPolyline.setAttribute("stroke-width", "10");
+        glowPolyline.setAttribute("stroke-opacity", "0.3");
+        glowPolyline.setAttribute("stroke-linecap", "round");
+        glowPolyline.setAttribute("stroke-linejoin", "round");
+        activePathLayer.appendChild(glowPolyline);
+
+        // Main continuous animated route polyline
+        const routePolyline = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+        routePolyline.setAttribute("points", points);
+        routePolyline.setAttribute("fill", "none");
+        routePolyline.setAttribute("stroke", "#1e293b");
+        routePolyline.setAttribute("stroke-width", "6.5");
+        routePolyline.setAttribute("stroke-linecap", "round");
+        routePolyline.setAttribute("stroke-linejoin", "round");
+        routePolyline.setAttribute("pathLength", "1");
+        routePolyline.classList.add("path-animated");
+        activePathLayer.appendChild(routePolyline);
+      }
+
+      // 3. Draw Station Nodes & Labels
+      const activeSet = new Set(activePathIds);
+      network.stations.forEach(st => {
+        const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+
+        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        circle.setAttribute("id", `node-${st.id}`);
+        circle.setAttribute("cx", st.x);
+        circle.setAttribute("cy", st.y);
+        
+        const r = activeSet.has(st.id) ? 8.5 : (st.is_interchange ? 7 : 5);
+        circle.setAttribute("r", r);
+
+        let fill = "#ffffff";
+        if (activeSet.has(st.id)) fill = "#1e293b";
+        else if (st.is_interchange) fill = "#ffffff";
+
+        circle.setAttribute("fill", fill);
+        circle.setAttribute("stroke", activeSet.has(st.id) ? "#1e293b" : (st.is_interchange ? "#334155" : "#94a3b8"));
+        circle.setAttribute("stroke-width", st.is_interchange ? "2.5" : "2");
+        circle.classList.add("station-node");
+
+        // Station click toggles Origin or Destination
+        circle.onclick = () => {
+          if (clickSelectToggle) {
+            document.getElementById("originSelect").value = st.id;
+          } else {
+            document.getElementById("destSelect").value = st.id;
+          }
+          clickSelectToggle = !clickSelectToggle;
+          updateSelectionMarkers();
+        };
+
+        const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        const isVerticalSpine = (st.id >= 18 && st.id <= 34) || (st.id >= 40 && st.id <= 44) || (st.id >= 48 && st.id <= 51);
+        label.setAttribute("x", st.x + (isVerticalSpine ? -12 : 0));
+        label.setAttribute("y", st.y + (isVerticalSpine ? 4 : -12));
+        label.setAttribute("text-anchor", isVerticalSpine ? "end" : "middle");
+        label.setAttribute("fill", activeSet.has(st.id) ? "#0f172a" : "#64748b");
+        label.setAttribute("font-size", activeSet.has(st.id) ? "11" : "9.5");
+        label.setAttribute("font-weight", activeSet.has(st.id) ? "bold" : (st.is_interchange ? "700" : "600"));
+        label.textContent = st.name;
+
+        g.appendChild(circle);
+        g.appendChild(label);
+        nodesLayer.appendChild(g);
+      });
+
+      updateSelectionMarkers();
+    }
+
+    async function findRoute() {
+      const origin = parseInt(document.getElementById("originSelect").value);
+      const destination = parseInt(document.getElementById("destSelect").value);
+      const is_peak = document.getElementById("peakSelect").value === "true";
+
+      if (origin === destination) {
+        alert("Please select two different stations for Origin and Destination.");
+        return;
+      }
+
+      try {
+        const res = await fetch("/api/route", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ origin, destination, algorithm: currentAlgo, is_peak })
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+          alert(data.detail || "Routing request failed.");
+          return;
+        }
+        lastRouteData = data;
+
+        if (!data.found) {
+          renderMap([]);
+          document.getElementById("metricsContent").classList.add("hidden");
+          document.getElementById("metricsContent").classList.remove("flex");
+          document.getElementById("metricsPlaceholder").classList.remove("hidden");
+          alert(data.message || "No active route available between selected stations due to track closures.");
+          return;
+        }
+
+        renderMap(data.path_ids);
+        updateSidebarDetails(data);
+      } catch (err) {
+        console.error("Routing error:", err);
+      }
+    }
+
+    function esc(t) {
+      return String(t).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+    }
+
+    function updateSidebarDetails(data) {
+      document.getElementById("metricsPlaceholder").classList.add("hidden");
+      document.getElementById("metricsContent").classList.remove("hidden");
+      document.getElementById("metricsContent").classList.add("flex");
+
+      const m = data.metrics;
+      document.getElementById("mTime").textContent = `${m.total_commute_mins}m`;
+      document.getElementById("mInTrain").textContent = `${m.in_train_time_mins}m ride + ${m.transfer_time_mins}m transfer`;
+      document.getElementById("mDist").textContent = `${m.distance_km} km`;
+      document.getElementById("mStops").textContent = `${m.total_stops} stops`;
+      document.getElementById("mTokenFare").textContent = `₹${m.token_fare}`;
+      document.getElementById("mNcmcFare").textContent = `₹${m.ncmc_fare} NCMC`;
+      document.getElementById("mTransfersBadge").textContent = `${m.transfers} Transfer${m.transfers === 1 ? '' : 's'}`;
+      document.getElementById("stepCountBadge").textContent = `${data.steps.length} Stations`;
+      document.getElementById("algoLabel").textContent = data.algorithm;
+
+      const list = document.getElementById("itineraryList");
+      let html = "";
+
+      data.steps.forEach((s, i) => {
+        const isTransfer = s.transfer_here;
+        const colorClass = TAILWIND_COLORS[s.line_used] || "bg-slate-400";
+        const delay = i * 0.05;
+
+        if (isTransfer) {
+          html += `
+            <div class="pl-7 py-1 text-[11px] font-bold text-indigo-600 uppercase tracking-wider flex items-center gap-1.5 animate-step" style="animation-delay: ${delay}s">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path></svg>
+              <span>Transfer at ${esc(s.station.name)}: Switch to ${esc(s.line_used)}</span>
+            </div>
+          `;
+        }
+
+        html += `
+          <div class="flex items-center gap-3 animate-step" style="animation-delay: ${delay + 0.03}s">
+            <div class="w-4 h-4 rounded-full ${colorClass} shadow-sm border-2 border-white flex-shrink-0 z-10 relative"></div>
+            <div class="flex-1 bg-white p-2.5 rounded-lg border border-slate-100 shadow-sm flex justify-between items-center">
+              <div>
+                <span class="font-bold text-slate-700 text-sm block">${esc(s.station.name)}</span>
+                <span class="text-[10px] text-slate-400">${esc(s.line_used)}</span>
+              </div>
+              <div class="flex items-center gap-1">
+                ${s.station.is_interchange ? '<span class="text-[9px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-semibold">Junction</span>' : ''}
+                ${i === 0 ? '<span class="text-[9px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded uppercase font-bold">Start</span>' : ''}
+                ${i === data.steps.length - 1 ? '<span class="text-[9px] bg-red-100 text-red-600 px-2 py-0.5 rounded uppercase font-bold">End</span>' : ''}
+              </div>
+            </div>
+          </div>
+        `;
+      });
+      list.innerHTML = html;
+    }
+
+    // ========================================================================
+    // TRACK MUTATION & EDGE FAILURE INSPECTOR
+    // ========================================================================
+    function openTrackModal(edge) {
+      selectedEdge = edge;
+      document.getElementById("trackModalTitle").textContent = `${edge.u_name} ↔ ${edge.v_name}`;
+      document.getElementById("trackModalLine").textContent = edge.line_name;
+      document.getElementById("trackModalDist").textContent = `${edge.distance_km} km`;
+      document.getElementById("trackModalBaseTime").textContent = `${edge.base_time_mins} min`;
+
+      document.getElementById("trackCloseCheckbox").checked = edge.is_closed;
+      document.getElementById("trackDelayInput").value = edge.delay_mins || 0;
+      document.getElementById("trackDelayDisplay").textContent = `+${edge.delay_mins || 0} min`;
+
+      document.getElementById("trackModal").classList.remove("hidden");
+      document.getElementById("trackModal").classList.add("flex");
+    }
+
+    function closeTrackModal() {
+      document.getElementById("trackModal").classList.add("hidden");
+      document.getElementById("trackModal").classList.remove("flex");
+      selectedEdge = null;
+    }
+
+    function setDelayPreset(mins) {
+      document.getElementById("trackDelayInput").value = mins;
+      document.getElementById("trackDelayDisplay").textContent = `+${mins} min`;
+    }
+
+    document.getElementById("trackDelayInput").addEventListener("input", (e) => {
+      document.getElementById("trackDelayDisplay").textContent = `+${e.target.value || 0} min`;
+    });
+
+    async function applyTrackMutation() {
+      if (!selectedEdge) return;
+      const is_closed = document.getElementById("trackCloseCheckbox").checked;
+      const delay_mins = Math.min(60, Math.max(0, parseInt(document.getElementById("trackDelayInput").value) || 0));
+
+      try {
+        const res = await fetch("/api/track", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            u: selectedEdge.u,
+            v: selectedEdge.v,
+            is_closed: is_closed,
+            delay_mins: delay_mins
+          })
+        });
+
+        if (res.ok) {
+          closeTrackModal();
+          await loadNetwork(true);
+          // Reroute immediately if route was active
+          if (lastRouteData) {
+            findRoute();
+          }
+        } else {
+          alert("Could not update track status.");
+        }
+      } catch (err) {
+        console.error("Track mutation error:", err);
+      }
+    }
+
+    async function resetAllTracks() {
+      try {
+        const res = await fetch("/api/reset", { method: "POST" });
+        if (res.ok) {
+          await loadNetwork(true);
+          if (lastRouteData) {
+            findRoute();
+          }
+        }
+      } catch (err) {
+        console.error("Reset error:", err);
+      }
+    }
+
+    window.onload = () => loadNetwork(false);
+  </script>
+</body>
+</html>
